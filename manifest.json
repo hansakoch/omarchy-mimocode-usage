@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "hansakoch.mimocode-usage",
+  "name": "MiMoCode Usage",
+  "version": "1.0.0",
+  "author": "hansakoch",
+  "license": "MIT",
+  "description": "MiMoCode token usage in the Omarchy agents panel. Tracks local and remote MiMoCode + Hermes sessions via SSH.",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "MiMoCode Usage",
+    "description": "Shows MiMoCode token usage from local and remote machines in the agents panel.",
+    "category": "AI",
+    "aliases": ["mimocode-usage", "mimo-usage"],
+    "allowMultiple": false
+  }
+}

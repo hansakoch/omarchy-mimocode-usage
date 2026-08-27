@@ -1,0 +1,69 @@
+#!/bin/bash
+# Update MiMoCode monthly token usage for the Omarchy agents panel.
+#
+# Usage:
+#   mimocode-usage 64                    # set percentage directly
+#   mimocode-usage 52426735109           # set from raw token count
+#   mimocode-usage 52426735109 82000000000  # set both used + total
+
+set -euo pipefail
+
+CONFIG="$HOME/.config/mimocode/usage-config.json"
+USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage"
+COLLECTOR="$HOME/.local/bin/collect-mimocode-usage"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: mimocode-usage <percent|used_tokens> [total_tokens]"
+    echo ""
+    echo "Examples:"
+    echo "  mimocode-usage 64                    # 64% used"
+    echo "  mimocode-usage 52426735109           # from raw token count"
+    echo "  mimocode-usage 52426735109 82000000000"
+    exit 1
+fi
+
+arg="$1"
+mkdir -p "$(dirname "$CONFIG")"
+
+# Read existing config
+existing_total=82000000000
+existing_used=0
+existing_host=""
+existing_mc_db=""
+existing_hermes_db=""
+if [[ -f "$CONFIG" ]]; then
+    existing_total=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('monthly_tokens', 82000000000))" 2>/dev/null || echo 82000000000)
+    existing_used=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('current_used', 0))" 2>/dev/null || echo 0)
+    existing_host=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('remote_host', ''))" 2>/dev/null || echo "")
+    existing_mc_db=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('remote_mimocode_db', ''))" 2>/dev/null || echo "")
+    existing_hermes_db=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('remote_hermes_db', ''))" 2>/dev/null || echo "")
+fi
+
+total="${2:-$existing_total}"
+
+# If <= 100, treat as percentage; otherwise as raw token count
+is_pct=$(python3 -c "print('yes' if float('${arg%\%}') <= 100 else 'no')" 2>/dev/null || echo "no")
+if [[ "$is_pct" == "yes" ]]; then
+    used=$(python3 -c "print(int(float('${arg%\%}') / 100 * int('$total')))")
+else
+    used="${arg%\%}"
+fi
+
+# Write config preserving remote settings
+python3 -c "
+import json
+cfg = {
+    'monthly_tokens': int('$total'),
+    'current_used': int('$used'),
+    'remote_host': '$existing_host',
+    'remote_mimocode_db': '$existing_mc_db',
+    'remote_hermes_db': '$existing_hermes_db',
+}
+json.dump(cfg, open('$CONFIG', 'w'), indent=2)
+print(f'Updated: {int(\"$used\")/int(\"$total\")*100:.1f}% used ({int(\"$used\"):,} / {int(\"$total\"):,})')
+"
+
+# Refresh the panel data
+mkdir -p "$USAGE_DIR"
+python3 "$COLLECTOR" > "$USAGE_DIR/mimocode.json"
+echo "Panel data refreshed."
