@@ -22,8 +22,9 @@ CONFIG_PATH = Path.home() / ".config" / "mimocode" / "usage-config.json"
 USAGE_JSON = Path.home() / ".config" / "mimocode" / "usage.json"
 
 # Token plan credit multipliers (derived from actual usage vs dashboard)
-# mimo-v2.5-pro costs 8 credits per token, other non-free models cost 2x
+# Only MiMo models consume token plan credits. Grok, nvidia, etc. use separate API keys.
 PRO_MODELS = {"mimo-v2.5-pro", "mimo-v2-pro"}
+MIMO_MODELS = {"mimo-v2.5-pro", "mimo-v2.5", "mimo-auto", "mimo-v2-pro"}
 FREE_KEYWORDS = {":free", "free hermes"}
 
 
@@ -36,9 +37,10 @@ def model_credit_multiplier(model_id):
     name = model_id.split("/")[-1].lower().replace(":thinking", "")
     if name in PRO_MODELS:
         return 8
-    if is_free_model(name):
-        return 0
-    return 2
+    if name in MIMO_MODELS:
+        return 2
+    # Grok, nvidia, tencent, etc. — not part of MiMo token plan
+    return 0
 
 
 def tokens_to_credits(model_usage):
