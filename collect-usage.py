@@ -21,6 +21,35 @@ AGENT_NAME = "MiMoCode"
 CONFIG_PATH = Path.home() / ".config" / "mimocode" / "usage-config.json"
 USAGE_JSON = Path.home() / ".config" / "mimocode" / "usage.json"
 
+# Token plan credit multipliers (derived from actual usage vs dashboard)
+# mimo-v2.5-pro costs 8 credits per token, other non-free models cost 2x
+PRO_MODELS = {"mimo-v2.5-pro", "mimo-v2-pro"}
+FREE_KEYWORDS = {":free", "free hermes"}
+
+
+def is_free_model(name):
+    lower = name.lower()
+    return any(kw in lower for kw in FREE_KEYWORDS)
+
+
+def model_credit_multiplier(model_id):
+    name = model_id.split("/")[-1].lower().replace(":thinking", "")
+    if name in PRO_MODELS:
+        return 8
+    if is_free_model(name):
+        return 0
+    return 2
+
+
+def tokens_to_credits(model_usage):
+    """Convert raw token counts to credits using per-model multipliers."""
+    total = 0
+    for model, bucket in model_usage.items():
+        mult = model_credit_multiplier(model)
+        if mult > 0:
+            total += sum(bucket.values()) * mult
+    return total
+
 
 def load_config():
     defaults = {
@@ -340,7 +369,9 @@ def main():
     recent_days = [{"date": d, "messageCount": stats.get("recentMap", {}).get(d, 0)} for d in dates]
 
     total_limit = cfg.get("monthly_tokens", 82_000_000_000)
-    used_credits = cfg.get("current_used", 0)
+
+    # Auto-calculate credits from model usage using per-model multipliers
+    used_credits = tokens_to_credits(stats["modelUsage"])
 
     monthly = None
     if total_limit > 0 and used_credits > 0:
