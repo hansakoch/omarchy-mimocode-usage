@@ -55,7 +55,8 @@ def tokens_to_credits(model_usage):
 
 def load_config():
     defaults = {
-        "monthly_tokens": 82_000_000_000,
+        "monthly_tokens": 0,  # 0 = no token plan (hides monthly meter)
+        "tier_label": "",     # e.g. "Max Monthly Plan", "Pro Monthly Plan"
         "remote_host": "",
         "remote_mimocode_db": "",
         "remote_hermes_db": "",
@@ -398,7 +399,7 @@ def main():
         "activeDates": sorted(stats["activeDates"]),
         "modelUsage": stats["modelUsage"],
         "limits": [],
-        "tierLabel": "Token Plan",
+        "tierLabel": cfg.get("tier_label", ""),
     }
 
     if monthly:
