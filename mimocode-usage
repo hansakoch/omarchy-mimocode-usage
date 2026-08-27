@@ -1,13 +1,10 @@
 #!/bin/bash
-# Update MiMoCode monthly credit usage for the Omarchy agents panel.
-# Daily chart and model breakdown are auto-calculated from session databases.
-# The monthly % uses credits from the token plan dashboard.
+# Show MiMoCode usage or force a refresh.
+# Usage is auto-calculated from session databases — no manual input needed.
 #
 # Usage:
-#   mimocode-usage                  # show current config
-#   mimocode-usage 64               # set 64% used
-#   mimocode-usage 52426735109      # set raw credit count
-#   mimocode-usage refresh          # force panel refresh
+#   mimocode-usage              # show current usage
+#   mimocode-usage refresh      # force panel refresh
 
 set -euo pipefail
 
@@ -15,61 +12,22 @@ CONFIG="$HOME/.config/mimocode/usage-config.json"
 USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage"
 COLLECTOR="$HOME/.local/bin/collect-mimocode-usage"
 
-mkdir -p "$(dirname "$CONFIG")"
-
-# Ensure config exists
-if [[ ! -f "$CONFIG" ]]; then
-    echo '{"monthly_tokens": 82000000000, "current_used": 0, "remote_host": "", "remote_mimocode_db": "", "remote_hermes_db": ""}' > "$CONFIG"
-fi
-
-if [[ $# -eq 0 ]]; then
-    python3 -c "
-import json
-cfg = json.load(open('$CONFIG'))
-total = cfg.get('monthly_tokens', 82000000000)
-used = cfg.get('current_used', 0)
-pct = used / total * 100 if total > 0 else 0
-print(f'Credits: {used:,} / {total:,} ({pct:.1f}%)')
-print(f'Remote host: {cfg.get(\"remote_host\", \"(none)\")}')
-"
-    exit 0
-fi
-
-arg="$1"
-
-if [[ "$arg" == "refresh" ]]; then
+if [[ "${1:-}" == "refresh" ]]; then
     mkdir -p "$USAGE_DIR"
     python3 "$COLLECTOR" > "$USAGE_DIR/mimocode.json"
     echo "Panel data refreshed."
     exit 0
 fi
 
-# Read existing config
-existing_total=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('monthly_tokens', 82000000000))" 2>/dev/null || echo 82000000000)
-total="${2:-$existing_total}"
-
-# Parse: if <= 100 treat as %, otherwise as raw credits
-python3 -c "
+# Show current state
+python3 "$COLLECTOR" 2>/dev/null | python3 -c "
 import json, sys
-
-arg = '$arg'
-total = int('$total')
-num = float(arg.rstrip('%'))
-
-if num <= 100:
-    used = int(num / 100 * total)
-    label = f'{num:.1f}%'
-else:
-    used = int(num)
-    label = f'{used/total*100:.1f}%'
-
-cfg = json.load(open('$CONFIG'))
-cfg['monthly_tokens'] = total
-cfg['current_used'] = used
-json.dump(cfg, open('$CONFIG', 'w'), indent=2)
-print(f'Updated: {label} used ({used:,} / {total:,})')
+d = json.load(sys.stdin)
+l = d.get('limits', [])
+if l:
+    print(f'Credits: {l[0][\"percent\"]*100:.1f}%')
+print(f'Prompts: {d[\"totalPrompts\"]}')
+print(f'Sessions: {d[\"totalSessions\"]}')
+print(f'Active days: {d[\"activeDays\"]}')
+print(f'Models: {len(d[\"modelUsage\"])}')
 "
-
-mkdir -p "$USAGE_DIR"
-python3 "$COLLECTOR" > "$USAGE_DIR/mimocode.json"
-echo "Panel data refreshed."
