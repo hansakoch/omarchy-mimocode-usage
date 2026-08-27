@@ -1,6 +1,8 @@
 # MiMoCode Usage for Omarchy
 
-MiMoCode token usage in the Omarchy agents panel. Tracks local and remote MiMoCode + Hermes sessions.
+MiMoCode token usage in the Omarchy agents panel. Tracks local and remote MiMoCode + Hermes sessions via SSH.
+
+Shows up as another tab in the existing agents panel alongside Claude, Codex, and Fireworks — no extra icon.
 
 ## Install
 
@@ -18,16 +20,20 @@ cd omarchy-mimocode-usage
 
 ## Setup
 
-Set your monthly usage (from the [token plan dashboard](https://platform.xiaomimimo.com/console/plan-manage)):
+**Monthly credit meter** — set your usage from the [token plan dashboard](https://platform.xiaomimimo.com/console/plan-manage):
 
 ```bash
 mimocode-usage 64          # percentage
-mimocode-usage 52426735109 # or raw token count
+mimocode-usage 52426735109 # or raw credit count
 ```
+
+The token plan uses credits (not raw tokens) with per-model multipliers that aren't publicly available, so the monthly % can't be auto-calculated. Update it when you check the dashboard.
+
+**Daily chart** — fully automatic. Reads from local MiMoCode SQLite database and optionally remote machines via SSH.
 
 ## Remote machine (optional)
 
-To combine stats from a remote server (e.g. Vultr), edit `~/.config/mimocode/usage-config.json`:
+To combine stats from a remote server, edit `~/.config/mimocode/usage-config.json`:
 
 ```json
 {
@@ -47,7 +53,13 @@ The collector reads token usage from MiMoCode's SQLite database (local and optio
 
 A systemd timer refreshes the data every 15 minutes.
 
-The monthly meter reads from `~/.config/mimocode/usage-config.json` — update it with `mimocode-usage` when you check the dashboard.
+## Commands
+
+```bash
+mimocode-usage              # show current config
+mimocode-usage 64           # set 64% monthly credits used
+mimocode-usage refresh      # force panel refresh
+```
 
 ## Uninstall
 

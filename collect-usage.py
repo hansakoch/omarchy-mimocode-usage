@@ -25,7 +25,6 @@ USAGE_JSON = Path.home() / ".config" / "mimocode" / "usage.json"
 def load_config():
     defaults = {
         "monthly_tokens": 82_000_000_000,
-        "current_used": 0,
         "remote_host": "",
         "remote_mimocode_db": "",
         "remote_hermes_db": "",
@@ -341,12 +340,13 @@ def main():
     recent_days = [{"date": d, "messageCount": stats.get("recentMap", {}).get(d, 0)} for d in dates]
 
     total_limit = cfg.get("monthly_tokens", 82_000_000_000)
-    used = cfg.get("current_used", 0)
+    used_credits = cfg.get("current_used", 0)
+
     monthly = None
-    if total_limit > 0 and used > 0:
+    if total_limit > 0 and used_credits > 0:
         monthly = {
             "label": "Monthly", "title": "Monthly",
-            "percent": min(used / total_limit, 1.0),
+            "percent": min(used_credits / total_limit, 1.0),
             "resetsAt": month_end_iso(),
         }
 
