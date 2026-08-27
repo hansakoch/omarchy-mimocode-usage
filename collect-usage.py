@@ -13,6 +13,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,6 +21,8 @@ AGENT_ID = "mimocode"
 AGENT_NAME = "MiMoCode"
 CONFIG_PATH = Path.home() / ".config" / "mimocode" / "usage-config.json"
 USAGE_JSON = Path.home() / ".config" / "mimocode" / "usage.json"
+CACHE_PATH = Path.home() / ".cache" / "mimocode" / "remote-usage.json"
+CACHE_TTL = 3600  # Refresh remote data every hour, not every click
 
 # Token plan credit multipliers (derived from actual usage vs dashboard)
 # Only MiMo models consume token plan credits. Grok, nvidia, etc. use separate API keys.
@@ -325,6 +328,66 @@ def month_end_iso():
     return end.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc).isoformat()
 
 
+def load_remote_cache():
+    """Load cached remote stats if fresh enough."""
+    if not CACHE_PATH.exists():
+        return None, None
+    try:
+        mtime = CACHE_PATH.stat().st_mtime
+        if time.time() - mtime > CACHE_TTL:
+            return None, None  # Stale
+        with open(CACHE_PATH) as f:
+            data = json.load(f)
+
+        def deserialize_stats(raw):
+            if not raw:
+                return None
+            return {
+                "todayTokens": raw["todayTokens"],
+                "todayPrompts": raw["todayPrompts"],
+                "todaySessions": set(raw["todaySessions"]),
+                "todayByModel": raw["todayByModel"],
+                "totalPrompts": raw["totalPrompts"],
+                "totalSessions": set(raw["totalSessions"]),
+                "activeDates": set(raw["activeDates"]),
+                "recentMap": raw.get("recentMap", {}),
+                "modelUsage": raw["modelUsage"],
+            }
+
+        return deserialize_stats(data.get("mimocode")), deserialize_stats(data.get("hermes"))
+    except Exception:
+        return None, None
+
+
+def save_remote_cache(mc_stats, hermes_stats):
+    """Cache remote stats to disk."""
+    try:
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        def serialize_stats(stats):
+            if not stats:
+                return None
+            return {
+                "todayTokens": stats["todayTokens"],
+                "todayPrompts": stats["todayPrompts"],
+                "todaySessions": list(stats["todaySessions"]),
+                "todayByModel": stats["todayByModel"],
+                "totalPrompts": stats["totalPrompts"],
+                "totalSessions": list(stats["totalSessions"]),
+                "activeDates": list(stats["activeDates"]),
+                "recentMap": stats.get("recentMap", {}),
+                "modelUsage": stats["modelUsage"],
+            }
+
+        with open(CACHE_PATH, "w") as f:
+            json.dump({
+                "mimocode": serialize_stats(mc_stats),
+                "hermes": serialize_stats(hermes_stats),
+            }, f)
+    except Exception:
+        pass
+
+
 def main():
     cfg = load_config()
     dates = recent_dates()
@@ -335,12 +398,17 @@ def main():
     remote_hermes = None
     host = cfg.get("remote_host", "")
     if host:
-        mc_db = cfg.get("remote_mimocode_db", "")
-        hermes_db = cfg.get("remote_hermes_db", "")
-        if mc_db:
-            remote_mc = collect_remote_mimocode(host, mc_db)
-        if hermes_db:
-            remote_hermes = collect_remote_hermes(host, hermes_db)
+        # Try cache first (avoids SSH on every click)
+        remote_mc, remote_hermes = load_remote_cache()
+        if remote_mc is None and remote_hermes is None:
+            # Cache miss or stale — fetch via SSH
+            mc_db = cfg.get("remote_mimocode_db", "")
+            hermes_db = cfg.get("remote_hermes_db", "")
+            if mc_db:
+                remote_mc = collect_remote_mimocode(host, mc_db)
+            if hermes_db:
+                remote_hermes = collect_remote_hermes(host, hermes_db)
+            save_remote_cache(remote_mc, remote_hermes)
 
     stats = local or remote_mc or remote_hermes
     if not stats:
