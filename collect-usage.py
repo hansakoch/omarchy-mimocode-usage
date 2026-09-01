@@ -682,16 +682,22 @@ def main():
     if run_rate.get("daysLeftCurrent") is not None:
         days = run_rate["daysLeftCurrent"]
         end = run_rate.get("projectedEndCurrent", "")
+        # Short date: Sep 6 instead of 2026-09-06
+        short_end = ""
+        if end:
+            try:
+                short_end = datetime.fromisoformat(end).strftime("%b %d")
+            except Exception:
+                short_end = end
         if days < 7:
-            status_parts.append(f"⚠ {days:.0f}d left at today's pace (hits {end})")
+            status_parts.append(f"⚠ {days:.0f}d → {short_end}")
         elif days < 14:
-            status_parts.append(f"~{days:.0f}d left at today's pace")
+            status_parts.append(f"~{days:.0f}d → {short_end}")
         else:
-            status_parts.append(f"{days:.0f}d left at today's pace")
+            status_parts.append(f"{days:.0f}d at pace")
     if run_rate.get("daysLeftHistorical") is not None:
         days = run_rate["daysLeftHistorical"]
-        end = run_rate.get("projectedEndHistorical", "")
-        status_parts.append(f"~{days:.0f}d at avg pace (hits {end})")
+        status_parts.append(f"avg ~{days:.0f}d")
     if status_parts:
         record["usageStatusText"] = " · ".join(status_parts)
 
