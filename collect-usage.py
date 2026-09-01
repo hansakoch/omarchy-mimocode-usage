@@ -21,8 +21,10 @@ AGENT_ID = "mimocode"
 AGENT_NAME = "MiMoCode"
 CONFIG_PATH = Path.home() / ".config" / "mimocode" / "usage-config.json"
 USAGE_JSON = Path.home() / ".config" / "mimocode" / "usage.json"
+PLAN_DATA_FILE = Path.home() / ".config" / "mimocode" / "xiaomi-plan-data.json"
 CACHE_PATH = Path.home() / ".cache" / "mimocode" / "remote-usage.json"
 CACHE_TTL = 3600  # Refresh remote data every hour, not every click
+CDP_PORT = 9222
 
 # Token plan credit multipliers (derived from actual usage vs dashboard)
 # Only MiMo models consume token plan credits. Grok, nvidia, etc. use separate API keys.
@@ -72,6 +74,87 @@ def load_config():
         except Exception:
             pass
     return defaults
+
+
+def fetch_plan_from_browser():
+    """Fetch plan data from the Xiaomi API via the running browser's CDP.
+
+    Connects to Chromium's remote debugging port and runs fetch() in the
+    browser context, using the existing session cookies. Returns the parsed
+    API response or None.
+    """
+    import urllib.request
+    try:
+        pages = json.loads(urllib.request.urlopen(
+            f"http://localhost:{CDP_PORT}/json", timeout=3
+        ).read())
+    except Exception:
+        return None
+
+    # Find a usable page
+    ws_url = None
+    for p in pages:
+        if p.get("webSocketDebuggerUrl"):
+            ws_url = p["webSocketDebuggerUrl"]
+            if "xiaomimimo.com" in p.get("url", ""):
+                break
+
+    if not ws_url:
+        return None
+
+    js = """
+    (async () => {
+        try {
+            const [d, u] = await Promise.all([
+                fetch('https://platform.xiaomimimo.com/api/v1/tokenPlan/detail', {credentials:'include'}).then(r => r.json()),
+                fetch('https://platform.xiaomimimo.com/api/v1/tokenPlan/usage', {credentials:'include'}).then(r => r.json())
+            ]);
+            return JSON.stringify({detail: d, usage: u});
+        } catch(e) { return JSON.stringify({error: e.message}); }
+    })()
+    """
+    script = f"""
+    const ws = new WebSocket("{ws_url}");
+    ws.onopen = () => ws.send(JSON.stringify({{id:1, method:"Runtime.evaluate", params:{json.dumps({"expression": js, "awaitPromise": True, "returnByValue": True})}}}));
+    ws.onmessage = (e) => {{ console.log(e.data); ws.close(); process.exit(0); }};
+    ws.onerror = () => process.exit(1);
+    setTimeout(() => process.exit(1), 10000);
+    """
+    try:
+        r = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and r.stdout.strip():
+            result = json.loads(r.stdout.strip())
+            value = result.get("result", {}).get("result", {}).get("value", "")
+            if value:
+                data = json.loads(value)
+                if not data.get("error") and data.get("detail", {}).get("code") != 401:
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+def load_plan_data():
+    """Load plan data: try browser first, then cached file."""
+    # Try live fetch from browser
+    live = fetch_plan_from_browser()
+    if live:
+        live["_saved_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            PLAN_DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+            PLAN_DATA_FILE.write_text(json.dumps(live, indent=2))
+            PLAN_DATA_FILE.chmod(0o600)
+        except Exception:
+            pass
+        return live
+
+    # Fall back to cached file
+    if PLAN_DATA_FILE.exists():
+        try:
+            return json.loads(PLAN_DATA_FILE.read_text())
+        except Exception:
+            pass
+    return None
 
 
 def today_str():
@@ -441,16 +524,45 @@ def main():
 
     total_limit = cfg.get("monthly_tokens", 82_000_000_000)
 
-    # Auto-calculate credits from model usage using per-model multipliers
-    used_credits = tokens_to_credits(stats["modelUsage"])
+    # Try to get real plan usage from the Xiaomi API
+    plan_data = load_plan_data()
+    plan_detail = plan_data.get("detail", {}).get("data", {}) if plan_data else {}
+    plan_usage = plan_data.get("usage", {}).get("data", {}) if plan_data else {}
 
+    # Use API tier label if available, fall back to config
+    tier_label = cfg.get("tier_label", "")
+    if plan_detail.get("planName"):
+        auto = plan_detail.get("enableAutoRenew", False)
+        tier_label = f"{plan_detail['planName']} {'Auto-Renewal' if auto else ''} Monthly".strip()
+
+    # Use API usage percentage if available, fall back to local calculation
     monthly = None
-    if total_limit > 0 and used_credits > 0:
+    month_items = plan_usage.get("monthUsage", {}).get("items", [])
+    if month_items:
+        item = month_items[0]
+        expires = plan_detail.get("currentPeriodEnd", "")
+        resets_at = ""
+        if expires:
+            try:
+                resets_at = expires.replace(" ", "T") + "+00:00"
+            except Exception:
+                resets_at = month_end_iso()
+        else:
+            resets_at = month_end_iso()
         monthly = {
             "label": "Monthly", "title": "Monthly",
-            "percent": min(used_credits / total_limit, 1.0),
-            "resetsAt": month_end_iso(),
+            "percent": item.get("percent", 0),
+            "resetsAt": resets_at,
         }
+    elif total_limit > 0:
+        # Fall back to local calculation
+        used_credits = tokens_to_credits(stats["modelUsage"])
+        if used_credits > 0:
+            monthly = {
+                "label": "Monthly", "title": "Monthly",
+                "percent": min(used_credits / total_limit, 1.0),
+                "resetsAt": month_end_iso(),
+            }
 
     record = {
         "schemaVersion": 1, "id": AGENT_ID, "name": AGENT_NAME,
@@ -467,7 +579,7 @@ def main():
         "activeDates": sorted(stats["activeDates"]),
         "modelUsage": stats["modelUsage"],
         "limits": [],
-        "tierLabel": cfg.get("tier_label", ""),
+        "tierLabel": tier_label,
     }
 
     if monthly:

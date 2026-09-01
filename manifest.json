@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "hansakoch.mimocode-usage",
   "name": "MiMoCode Usage",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "hansakoch",
   "license": "MIT",
   "description": "MiMoCode token usage in the Omarchy agents panel. Tracks local and remote MiMoCode + Hermes sessions via SSH.",

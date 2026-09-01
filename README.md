@@ -1,6 +1,6 @@
 # MiMoCode Usage for Omarchy
 
-MiMoCode token plan credits in the Omarchy agents panel. Fully automatic — no commands, no background processes.
+MiMoCode token plan usage in the Omarchy agents panel. Fully automatic — no commands, no manual steps.
 
 Appears as another tab alongside Claude, Codex, and Fireworks. No extra icon.
 
@@ -22,7 +22,11 @@ cd omarchy-mimocode-usage
 
 Hooks into the existing agents panel refresh — when you open the panel or press `r`, MiMoCode updates alongside Claude/Codex/Fireworks. No background timer.
 
-Reads token usage from MiMoCode's SQLite database (local + remote via SSH) and converts to credits using per-model multipliers:
+**Plan usage** is fetched live from the Xiaomi MiMo API via your running browser's existing session (CDP). Just stay logged in to `platform.xiaomimimo.com` in Chromium — no cookies to copy, no commands to run.
+
+**Local stats** are read from MiMoCode's SQLite database. Remote stats (Vultr, etc.) are fetched via SSH with a 1-hour cache.
+
+### Token multipliers (local stats breakdown)
 
 | Model | Credits per token |
 |-------|------------------|
@@ -42,6 +46,11 @@ Edit `~/.config/mimocode/usage-config.json`:
   "remote_hermes_db": "/home/user/.hermes/state.db"
 }
 ```
+
+## Requirements
+
+- Chromium with `--remote-debugging-port=9222` (add to `~/.config/chromium-flags.conf`)
+- Logged in to `platform.xiaomimimo.com`
 
 ## Uninstall
 

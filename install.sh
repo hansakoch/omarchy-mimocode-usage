@@ -56,8 +56,16 @@ fi
 mkdir -p "$USAGE_DIR"
 python3 "$BIN_DIR/collect-mimocode-usage" > "$USAGE_DIR/mimocode.json" 2>/dev/null || true
 
+# Ensure Chromium has CDP enabled for live plan data
+CHROMIUM_FLAGS="$HOME/.config/chromium-flags.conf"
+if [[ -f "$CHROMIUM_FLAGS" ]] && ! grep -q "remote-debugging-port" "$CHROMIUM_FLAGS"; then
+    echo "--remote-debugging-port=9222" >> "$CHROMIUM_FLAGS"
+    echo "Added --remote-debugging-port=9222 to Chromium flags (restart Chromium to take effect)."
+fi
+
 echo ""
 echo "Installed! MiMoCode will appear in the agents panel."
-echo "Refreshes automatically when you open the agents panel."
+echo "Plan usage is fetched live from the Xiaomi API via your browser session."
+echo "Stay logged in to platform.xiaomimimo.com in Chromium."
 echo ""
 echo "Configure remote machine in ~/.config/mimocode/usage-config.json"
