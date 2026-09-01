@@ -412,17 +412,19 @@ def month_end_iso():
 
 
 def estimate_run_rate(stats, plan_data, total_limit):
-    """Estimate days until plan limit is hit.
+    """Estimate daily budget and burn rate.
 
-    Returns a dict with current-month rate, historical rate, and projected
-    days remaining. Uses API usage data when available, falls back to local
-    token counts.
+    Tokens expire at month end, so what matters is:
+    - How many tokens remain
+    - How many days are left in the billing cycle
+    - What daily budget that gives you
+    - Whether your current pace will run out or leave tokens wasted
     """
     now = datetime.now()
     today = now.date()
-    days_in_month = 30  # approximate
 
     plan_usage = plan_data.get("usage", {}).get("data", {}) if plan_data else {}
+    plan_detail = plan_data.get("detail", {}).get("data", {}) if plan_data else {}
     month_items = plan_usage.get("monthUsage", {}).get("items", [])
 
     # Get current month usage (API preferred, local fallback)
@@ -433,69 +435,77 @@ def estimate_run_rate(stats, plan_data, total_limit):
         used = tokens_to_credits(stats.get("modelUsage", {}))
         pct = used / total_limit if total_limit > 0 else 0
 
-    # Days elapsed in current month
-    month_start = today.replace(day=1)
-    days_elapsed = max((today - month_start).days + 1, 1)
+    remaining = total_limit - used
+
+    # Days left in billing cycle
+    expires = plan_detail.get("currentPeriodEnd", "")
+    end_date = None
+    if expires:
+        try:
+            end_date = datetime.fromisoformat(expires.replace(" ", "T")).date()
+        except Exception:
+            pass
+    if not end_date:
+        # Default to end of month
+        if now.month == 12:
+            end_date = now.replace(year=now.year + 1, month=1, day=1).date()
+        else:
+            end_date = now.replace(month=now.month + 1, day=1).date()
+
+    days_left = max((end_date - today).days, 1)
+
+    # Daily budget to use all tokens by expiry
+    daily_budget = remaining / days_left if days_left > 0 else 0
 
     # Current month daily rate
-    current_daily = used / days_elapsed if days_elapsed > 0 else 0
+    month_start = today.replace(day=1)
+    days_elapsed = max((today - month_start).days + 1, 1)
+    current_daily = used / days_elapsed
 
-    # Historical rate: use all active dates with token data
+    # Historical rate from recent days
     recent_map = stats.get("recentMap", {})
-    active_dates = stats.get("activeDates", set())
-    all_daily = []
-    for d, tokens in recent_map.items():
-        if tokens > 0:
-            all_daily.append(tokens)
-
-    # Also pull from active dates if we have enough history
+    all_daily = [t for t in recent_map.values() if t > 0]
     historical_daily = 0
     if len(all_daily) >= 3:
-        # Use median to avoid outlier days skewing the estimate
         sorted_daily = sorted(all_daily)
-        mid = len(sorted_daily) // 2
-        historical_daily = sorted_daily[mid]
+        historical_daily = sorted_daily[len(sorted_daily) // 2]
     elif all_daily:
         historical_daily = sum(all_daily) / len(all_daily)
 
-    # Days remaining estimates
-    remaining = total_limit - used
-    days_left_current = None
-    days_left_historical = None
+    # Convert historical tokens to credits
+    total_recent_tokens = sum(recent_map.values())
+    credit_per_token = used / total_recent_tokens if total_recent_tokens > 0 and used > 0 else 1
+    historical_daily_credits = historical_daily * credit_per_token
 
-    if current_daily > 0:
-        days_left_current = remaining / current_daily
-
-    if historical_daily > 0:
-        # Historical rate is in raw tokens, need to convert to credits
-        # Use the ratio of credits to tokens from current usage
-        total_tokens = sum(recent_map.values())
-        if total_tokens > 0 and used > 0:
-            credit_per_token = used / total_tokens
-            historical_daily_credits = historical_daily * credit_per_token
-            if historical_daily_credits > 0:
-                days_left_historical = remaining / historical_daily_credits
-
-    # Projected end date
+    # Projected end dates
     projected_end_current = None
     projected_end_historical = None
-    if days_left_current is not None:
-        projected_end_current = (today + timedelta(days=int(days_left_current))).isoformat()
-    if days_left_historical is not None:
-        projected_end_historical = (today + timedelta(days=int(days_left_historical))).isoformat()
+    if current_daily > 0:
+        days_to_100_current = remaining / current_daily
+        projected_end_current = (today + timedelta(days=int(days_to_100_current))).isoformat()
+    if historical_daily_credits > 0:
+        days_to_100_historical = remaining / historical_daily_credits
+        projected_end_historical = (today + timedelta(days=int(days_to_100_historical))).isoformat()
+
+    # Verdict
+    verdict = "on-track"
+    if current_daily > daily_budget * 1.5:
+        verdict = "over-pace"
+    elif current_daily < daily_budget * 0.5 and days_left < 15:
+        verdict = "under-pace"
 
     return {
         "used": int(used),
         "limit": int(total_limit),
         "percent": round(pct * 100, 1),
-        "daysElapsed": days_elapsed,
-        "daysInMonth": days_in_month,
-        "currentDailyRate": int(current_daily),
-        "historicalDailyRate": int(historical_daily),
-        "daysLeftCurrent": round(days_left_current, 1) if days_left_current else None,
-        "daysLeftHistorical": round(days_left_historical, 1) if days_left_historical else None,
+        "remaining": int(remaining),
+        "daysLeft": days_left,
+        "dailyBudget": int(daily_budget),
+        "currentDaily": int(current_daily),
+        "historicalDaily": int(historical_daily_credits),
         "projectedEndCurrent": projected_end_current,
         "projectedEndHistorical": projected_end_historical,
+        "verdict": verdict,
     }
 
 
@@ -678,26 +688,40 @@ def main():
     record["runRate"] = run_rate
 
     # Add run rate as status text the panel displays
+    rr = run_rate
     status_parts = []
-    if run_rate.get("daysLeftCurrent") is not None:
-        days = run_rate["daysLeftCurrent"]
-        end = run_rate.get("projectedEndCurrent", "")
-        # Short date: Sep 6 instead of 2026-09-06
+    days = rr.get("daysLeft", 0)
+    budget = rr.get("dailyBudget", 0)
+    current = rr.get("currentDaily", 0)
+    verdict = rr.get("verdict", "")
+
+    # Format budget and current as compact numbers (e.g. 2.4B, 71M)
+    def fmt_tokens(n):
+        if n >= 1_000_000_000:
+            return f"{n/1_000_000_000:.1f}B"
+        if n >= 1_000_000:
+            return f"{n/1_000_000:.0f}M"
+        if n >= 1_000:
+            return f"{n/1_000:.0f}K"
+        return str(int(n))
+
+    if verdict == "over-pace":
+        end = rr.get("projectedEndCurrent", "")
         short_end = ""
         if end:
             try:
                 short_end = datetime.fromisoformat(end).strftime("%b %d")
             except Exception:
                 short_end = end
-        if days < 7:
-            status_parts.append(f"⚠ {days:.0f}d → {short_end}")
-        elif days < 14:
-            status_parts.append(f"~{days:.0f}d → {short_end}")
-        else:
-            status_parts.append(f"{days:.0f}d at pace")
-    if run_rate.get("daysLeftHistorical") is not None:
-        days = run_rate["daysLeftHistorical"]
-        status_parts.append(f"avg ~{days:.0f}d")
+        status_parts.append(f"⚠ runs out {short_end}")
+        status_parts.append(f"budget {fmt_tokens(budget)}/d · using {fmt_tokens(current)}/d")
+    elif verdict == "under-pace":
+        status_parts.append(f"{days}d left · budget {fmt_tokens(budget)}/d")
+        status_parts.append(f"using {fmt_tokens(current)}/d")
+    else:
+        status_parts.append(f"{days}d left · budget {fmt_tokens(budget)}/d")
+        status_parts.append(f"using {fmt_tokens(current)}/d")
+
     if status_parts:
         record["usageStatusText"] = " · ".join(status_parts)
 
