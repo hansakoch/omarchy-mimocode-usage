@@ -677,6 +677,24 @@ def main():
     run_rate = estimate_run_rate(stats, plan_data, total_limit)
     record["runRate"] = run_rate
 
+    # Add run rate as status text the panel displays
+    status_parts = []
+    if run_rate.get("daysLeftCurrent") is not None:
+        days = run_rate["daysLeftCurrent"]
+        end = run_rate.get("projectedEndCurrent", "")
+        if days < 7:
+            status_parts.append(f"⚠ {days:.0f}d left at today's pace (hits {end})")
+        elif days < 14:
+            status_parts.append(f"~{days:.0f}d left at today's pace")
+        else:
+            status_parts.append(f"{days:.0f}d left at today's pace")
+    if run_rate.get("daysLeftHistorical") is not None:
+        days = run_rate["daysLeftHistorical"]
+        end = run_rate.get("projectedEndHistorical", "")
+        status_parts.append(f"~{days:.0f}d at avg pace (hits {end})")
+    if status_parts:
+        record["usageStatusText"] = " · ".join(status_parts)
+
     print(json.dumps(record))
 
 
