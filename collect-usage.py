@@ -689,13 +689,11 @@ def main():
 
     # Add run rate as status text the panel displays
     rr = run_rate
-    status_parts = []
     days = rr.get("daysLeft", 0)
     budget = rr.get("dailyBudget", 0)
     current = rr.get("currentDaily", 0)
     verdict = rr.get("verdict", "")
 
-    # Format budget and current as compact numbers (e.g. 2.4B, 71M)
     def fmt_tokens(n):
         if n >= 1_000_000_000:
             return f"{n/1_000_000_000:.1f}B"
@@ -705,6 +703,7 @@ def main():
             return f"{n/1_000:.0f}K"
         return str(int(n))
 
+    # Hero subtitle: short, fits in one line
     if verdict == "over-pace":
         end = rr.get("projectedEndCurrent", "")
         short_end = ""
@@ -713,17 +712,24 @@ def main():
                 short_end = datetime.fromisoformat(end).strftime("%b %d")
             except Exception:
                 short_end = end
-        status_parts.append(f"⚠ runs out {short_end}")
-        status_parts.append(f"budget {fmt_tokens(budget)}/d · using {fmt_tokens(current)}/d")
-    elif verdict == "under-pace":
-        status_parts.append(f"{days}d left · budget {fmt_tokens(budget)}/d")
-        status_parts.append(f"using {fmt_tokens(current)}/d")
+        record["tierLabel"] = f"Max · runs out {short_end}"
     else:
-        status_parts.append(f"{days}d left · budget {fmt_tokens(budget)}/d")
-        status_parts.append(f"using {fmt_tokens(current)}/d")
+        record["tierLabel"] = f"Max · {days}d left"
 
-    if status_parts:
-        record["usageStatusText"] = " · ".join(status_parts)
+    # Red status block: detailed breakdown (authHelpText)
+    status_parts = []
+    status_parts.append(f"Budget: {fmt_tokens(budget)}/d to last the month")
+    status_parts.append(f"Using: {fmt_tokens(current)}/d now")
+    if verdict == "over-pace":
+        end = rr.get("projectedEndCurrent", "")
+        short_end = ""
+        if end:
+            try:
+                short_end = datetime.fromisoformat(end).strftime("%b %d")
+            except Exception:
+                short_end = end
+        status_parts.append(f"⚠ At this pace you'll run out {short_end}")
+    record["authHelpText"] = "\n".join(status_parts)
 
     print(json.dumps(record))
 
