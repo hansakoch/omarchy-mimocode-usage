@@ -411,6 +411,94 @@ def month_end_iso():
     return end.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc).isoformat()
 
 
+def estimate_run_rate(stats, plan_data, total_limit):
+    """Estimate days until plan limit is hit.
+
+    Returns a dict with current-month rate, historical rate, and projected
+    days remaining. Uses API usage data when available, falls back to local
+    token counts.
+    """
+    now = datetime.now()
+    today = now.date()
+    days_in_month = 30  # approximate
+
+    plan_usage = plan_data.get("usage", {}).get("data", {}) if plan_data else {}
+    month_items = plan_usage.get("monthUsage", {}).get("items", [])
+
+    # Get current month usage (API preferred, local fallback)
+    if month_items:
+        used = month_items[0].get("used", 0)
+        pct = month_items[0].get("percent", 0)
+    else:
+        used = tokens_to_credits(stats.get("modelUsage", {}))
+        pct = used / total_limit if total_limit > 0 else 0
+
+    # Days elapsed in current month
+    month_start = today.replace(day=1)
+    days_elapsed = max((today - month_start).days + 1, 1)
+
+    # Current month daily rate
+    current_daily = used / days_elapsed if days_elapsed > 0 else 0
+
+    # Historical rate: use all active dates with token data
+    recent_map = stats.get("recentMap", {})
+    active_dates = stats.get("activeDates", set())
+    all_daily = []
+    for d, tokens in recent_map.items():
+        if tokens > 0:
+            all_daily.append(tokens)
+
+    # Also pull from active dates if we have enough history
+    historical_daily = 0
+    if len(all_daily) >= 3:
+        # Use median to avoid outlier days skewing the estimate
+        sorted_daily = sorted(all_daily)
+        mid = len(sorted_daily) // 2
+        historical_daily = sorted_daily[mid]
+    elif all_daily:
+        historical_daily = sum(all_daily) / len(all_daily)
+
+    # Days remaining estimates
+    remaining = total_limit - used
+    days_left_current = None
+    days_left_historical = None
+
+    if current_daily > 0:
+        days_left_current = remaining / current_daily
+
+    if historical_daily > 0:
+        # Historical rate is in raw tokens, need to convert to credits
+        # Use the ratio of credits to tokens from current usage
+        total_tokens = sum(recent_map.values())
+        if total_tokens > 0 and used > 0:
+            credit_per_token = used / total_tokens
+            historical_daily_credits = historical_daily * credit_per_token
+            if historical_daily_credits > 0:
+                days_left_historical = remaining / historical_daily_credits
+
+    # Projected end date
+    projected_end_current = None
+    projected_end_historical = None
+    if days_left_current is not None:
+        projected_end_current = (today + timedelta(days=int(days_left_current))).isoformat()
+    if days_left_historical is not None:
+        projected_end_historical = (today + timedelta(days=int(days_left_historical))).isoformat()
+
+    return {
+        "used": int(used),
+        "limit": int(total_limit),
+        "percent": round(pct * 100, 1),
+        "daysElapsed": days_elapsed,
+        "daysInMonth": days_in_month,
+        "currentDailyRate": int(current_daily),
+        "historicalDailyRate": int(historical_daily),
+        "daysLeftCurrent": round(days_left_current, 1) if days_left_current else None,
+        "daysLeftHistorical": round(days_left_historical, 1) if days_left_historical else None,
+        "projectedEndCurrent": projected_end_current,
+        "projectedEndHistorical": projected_end_historical,
+    }
+
+
 def load_remote_cache():
     """Load cached remote stats if fresh enough."""
     if not CACHE_PATH.exists():
@@ -584,6 +672,10 @@ def main():
 
     if monthly:
         record["limits"].append(monthly)
+
+    # Run rate estimation
+    run_rate = estimate_run_rate(stats, plan_data, total_limit)
+    record["runRate"] = run_rate
 
     print(json.dumps(record))
 
